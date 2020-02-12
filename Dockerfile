@@ -9,4 +9,3 @@ RUN pip install globus_sdk
 ADD . /src/map-ephys
 
 RUN pip install -e /src/map-ephys
-

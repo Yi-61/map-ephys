@@ -14,6 +14,7 @@ from globus_sdk import DeleteData
 from globus_sdk import TransferData
 
 
+DEFAULT_GLOBUS_WAIT_TIMEOUT = 60
 log = logging.getLogger(__name__)
 
 
@@ -30,6 +31,7 @@ class GlobusStorageManager:
 
         self.auth_client = NativeAppAuthClient(self.app_id)
         self.auth_client.oauth2_start_flow(refresh_tokens=True)
+        self.wait_timeout = DEFAULT_GLOBUS_WAIT_TIMEOUT
         self.xfer_client = None
 
         custom = dj.config.get('custom', None)
@@ -102,8 +104,9 @@ class GlobusStorageManager:
         if not knownok:
             log.debug('activate_endpoint(): not knownok response')
 
-    def _wait(self, task, timeout=10, polling_interval=10):
+    def _wait(self, task, timeout=None, polling_interval=1):
         ''' tranfer client common wait wrapper '''
+        timeout = timeout if timeout else self.wait_timeout
         return self.xfer_client.task_wait(task, timeout, polling_interval)
 
     def _tasks(self):
@@ -159,22 +162,11 @@ class GlobusStorageManager:
         ep, path = self.ep_parts(endpoint_path)
         return self.xfer_client.operation_ls(ep, path=path)
 
-    def fts(self, ep_path, cb=None):
+    def fts(self, ep_path):
         '''
-        traverse a heirarchy, calling 'cb' at each node.
+        traverse a heirarchy, yielding each node.
         '''
-
-        def _cb(ep, dirname, node):
-            ''' default 'print path' callback '''
-            if node['DATA_TYPE'] == 'file':
-                basename = node['name']
-            else:
-                basename = node['path']
-
-            print('{}:{}/{}'.format(ep, dirname, basename))
-
         ep, path = self.ep_parts(ep_path)
-        cb = _cb if not cb else cb
 
         stack = []
         stack.append(path)
@@ -184,20 +176,20 @@ class GlobusStorageManager:
             u = stack.pop()
             e = self.ls('{}:{}'.format(ep, u))
 
-            cb(ep, u, e)
+            yield (ep, u, e)
             for ei in e['DATA']:
                 if ei['type'] == 'dir':
                     stack.append('{}/{}'.format(u, ei['name']))
                 else:
-                    cb(ep, u, ei)
+                    yield (ep, u, ei)
 
     def mkdir(self, ep_path):
         ''' create a directory at ep_path '''
         ep, path = self.ep_parts(ep_path)
         return self.xfer_client.operation_mkdir(ep, path=path)
 
-    def rmdir(self, ep_path, recursive=False):
-        ''' remove a directory at ep_path '''
+    def rm(self, ep_path, recursive=False):
+        ''' remove an item at ep_path; recursive for dirs '''
         tc = self.xfer_client
         ep, path = self.ep_parts(ep_path)
         ddata = DeleteData(tc, ep, recursive=recursive)

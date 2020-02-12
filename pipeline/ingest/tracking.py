@@ -21,35 +21,42 @@ log = logging.getLogger(__name__)
 [behavior_ingest]  # NOQA schema only use
 
 
-@schema
-class TrackingDataPath(dj.Lookup):
-    # ephys data storage location(s)
-    definition = """
-    -> lab.Rig
-    tracking_data_path:         varchar(255)            # rig data path
-    """
+def get_tracking_paths():
+    '''
+    retrieve behavior rig paths from dj.config
+    config should be in dj.config of the format:
 
-    @property
-    def contents(self):
-        if 'tracking_data_paths' in dj.config['custom']:  # for local testing
-            return dj.config['custom']['tracking_data_paths']
+      dj.config = {
+        ...,
+        'custom': {
+        "tracking_data_paths":
+            [
+                ["RRig", "/path/string"]
+            ]
+        }
+        ...
+      }
 
-        return [('RRig', r'H:\\data\MAP',)]
+    '''
+    return dj.config.get('custom', {}).get('tracking_data_paths', None)
 
 
 @schema
 class TrackingIngest(dj.Imported):
     definition = """
-    -> behavior_ingest.BehaviorIngest
+    -> experiment.Session
     """
 
     class TrackingFile(dj.Part):
         definition = '''
         -> TrackingIngest
         -> experiment.SessionTrial
+        -> tracking.TrackingDevice
         ---
         tracking_file:          varchar(255)            # tracking file subpath
         '''
+
+    key_source = experiment.Session - tracking.Tracking
 
     def make(self, key):
         '''
@@ -64,22 +71,22 @@ class TrackingIngest(dj.Imported):
         log.info('got session: {} ({} trials)'.format(session, len(trials)))
 
         sdate = session['session_date']
-        sdate_iso = sdate.isoformat()  # YYYY-MM-DD
         sdate_sml = "{}{:02d}{:02d}".format(sdate.year, sdate.month, sdate.day)
 
-        paths = TrackingDataPath.fetch(as_dict=True)
+        paths = get_tracking_paths()
         devices = tracking.TrackingDevice().fetch(as_dict=True)
 
         # paths like: <root>/<h2o>/YYYY-MM-DD/tracking
+        tracking_files = []
         for p, d in ((p, d) for d in devices for p in paths):
 
             tdev = d['tracking_device']
             tpos = d['tracking_position']
-            tdat = p['tracking_data_path']
+            tdat = p[-1]
 
             log.info('checking {} for tracking data'.format(tdat))
 
-            tpath = pathlib.Path(tdat, h2o, sdate_iso, 'tracking')
+            tpath = pathlib.Path(tdat, h2o, sdate.strftime('%Y%m%d'), 'tracking')
 
             if not tpath.exists():
                 log.warning('tracking path {} n/a - skipping'.format(tpath))
@@ -94,14 +101,13 @@ class TrackingIngest(dj.Imported):
                 log.info('skipping {} - does not exist'.format(campath))
                 continue
 
-            tmap = self.load_campath(campath)
+            tmap = self.load_campath(campath)  # file:trial
 
             n_tmap = len(tmap)
             log.info('loading tracking data for {} trials'.format(n_tmap))
 
             i = 0
             for t in tmap:  # load tracking for trial
-
                 if tmap[t] not in trials:
                     log.warning('nonexistant trial {}.. skipping'.format(t))
                     continue
@@ -119,7 +125,8 @@ class TrackingIngest(dj.Imported):
                 tfull = list(tpath.glob(tfile))
 
                 if not tfull or len(tfull) > 1:
-                    log.info('tracking file {} mismatch'.format(tfull))
+                    log.info('file mismatch: file: {} trial: {} ({})'.format(
+                        t, tmap[t], tfull))
                     continue
 
                 tfull = tfull[-1]
@@ -146,21 +153,49 @@ class TrackingIngest(dj.Imported):
                 tracking.Tracking.insert1(
                     recs['tracking'], allow_direct_insert=True)
 
-                tracking.Tracking.NoseTracking.insert1(
-                    recs['nose'], allow_direct_insert=True)
+                if 'nose' in recs:
+                    tracking.Tracking.NoseTracking.insert1(
+                        recs['nose'], allow_direct_insert=True)
 
-                tracking.Tracking.TongueTracking.insert1(
-                    recs['tongue'], allow_direct_insert=True)
+                if 'tongue' in recs:
+                    tracking.Tracking.TongueTracking.insert1(
+                        recs['tongue'], allow_direct_insert=True)
 
-                tracking.Tracking.JawTracking.insert1(
-                    recs['jaw'], allow_direct_insert=True)
+                if 'jaw' in recs:
+                    tracking.Tracking.JawTracking.insert1(
+                        recs['jaw'], allow_direct_insert=True)
+
+                if 'paw_left' in recs:
+                    fmap = {'paw_left_x': 'left_paw_x',  # remap field names
+                            'paw_left_y': 'left_paw_y',
+                            'paw_left_likelihood': 'left_paw_likelihood'}
+
+                    tracking.Tracking.LeftPawTracking.insert1({
+                        **{k: v for k, v in recs['paw_left'].items()
+                           if k not in fmap},
+                        **{fmap[k]: v for k, v in recs['paw_left'].items()
+                           if k in fmap}}, allow_direct_insert=True)
+
+                if 'paw_right' in recs:
+                    fmap = {'paw_right_x': 'right_paw_x',  # remap field names
+                            'paw_right_y': 'right_paw_y',
+                            'paw_right_likelihood': 'right_paw_likelihood'}
+
+                    tracking.Tracking.RightPawTracking.insert1({
+                        **{k: v for k, v in recs['paw_right'].items()
+                           if k not in fmap},
+                        **{fmap[k]: v for k, v in recs['paw_right'].items()
+                           if k in fmap}}, allow_direct_insert=True)
+
+                tracking_files.append({**key, 'trial': tmap[t], 'tracking_device': tdev,
+                     'tracking_file': str(tfull.relative_to(tdat))})
 
             log.info('... completed {}/{} items.'.format(i, n_tmap))
-            log.info('... saving load record')
 
-            self.insert1(key)
+        self.insert1(key)
+        self.TrackingFile.insert(tracking_files)
 
-            log.info('... done.')
+        log.info('... done.')
 
     @staticmethod
     def load_campath(campath):

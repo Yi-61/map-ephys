@@ -7,24 +7,16 @@ from . import get_schema_name
 
 schema = dj.schema(get_schema_name('experiment'))
 
-@schema
-class BrainLocation(dj.Manual):
-    definition = """
-    brain_location_name: varchar(32)  # unique name of this brain location (could be hash of the non-primary attr)
-    ---
-    -> lab.BrainArea
-    -> lab.Hemisphere
-    -> lab.SkullReference
-    """
-
 
 @schema
 class Session(dj.Manual):
     definition = """
     -> lab.Subject
-    session : smallint 		# session number
+    session: smallint 		# session number
     ---
-    session_date  : date
+    session_date: date
+    session_time: time
+    unique index (subject_id, session_date, session_time)
     -> lab.Person
     -> lab.Rig
     """
@@ -67,23 +59,29 @@ class TaskProtocol(dj.Lookup):
          ]
 
 
-
 @schema
 class Photostim(dj.Manual):
-    definition = """
+    definition = """  # Photostim protocol
     -> Session
-    photo_stim :  smallint 
+    photo_stim :  smallint  # photostim protocol number
     ---
     -> lab.PhotostimDevice
-    -> BrainLocation
-    ml_location=null: float # um from ref ; right is positive; based on manipulator coordinates/reconstructed track
-    ap_location=null: float # um from ref; anterior is positive; based on manipulator coordinates/reconstructed track
-    dv_location=null: float # um from dura; ventral is positive; based on manipulator coordinates/reconstructed track
-    ml_angle=null: float # Angle between the manipulator/reconstructed track and the Medio-Lateral axis. A tilt towards the right hemishpere is positive.
-    ap_angle=null: float # Angle between the manipulator/reconstructed track and the Anterior-Posterior axis. An anterior tilt is positive.
     duration=null:  decimal(8,4)   # (s)
     waveform=null:  longblob       # normalized to maximal power. The value of the maximal power is specified for each PhotostimTrialEvent individually
     """
+
+    class PhotostimLocation(dj.Part):
+        definition = """
+        -> master
+        -> lab.SkullReference
+        ap_location: decimal(6, 2) # (um) anterior-posterior; ref is 0; more anterior is more positive
+        ml_location: decimal(6, 2) # (um) medial axis; ref is 0 ; more right is more positive
+        depth:       decimal(6, 2) # (um) manipulator depth relative to surface of the brain (0); more ventral is more negative
+        theta:       decimal(5, 2) # (deg) - elevation - rotation about the ml-axis [0, 180] - w.r.t the z+ axis
+        phi:         decimal(5, 2) # (deg) - azimuth - rotation about the dv-axis [0, 360] - w.r.t the x+ axis
+        ---
+        -> lab.BrainArea           # target brain area for photostim 
+        """
 
     class Profile(dj.Part):
         # NOT USED CURRENT
@@ -94,24 +92,43 @@ class Photostim(dj.Manual):
         intensity_timecourse   :  longblob  # (mW/mm^2)
         """
 
-    # contents = [{
-    #     'photostim_device': 'OBIS470',
-    #     'photo_stim': 0,  # TODO: correct? whatmeens?
-    #     'duration': 0.5,
-    #     # FIXME/TODO: .3s of 40hz sin + .2s rampdown @ 100kHz. int32??
-    #     'waveform': np.zeros(int((0.3+0.2)*100000), np.int32)
-    # }]
+
+@schema
+class PhotostimBrainRegion(dj.Computed):
+    definition = """
+    -> Photostim
+    ---
+    -> lab.BrainArea.proj(stim_brain_area='brain_area')
+    stim_laterality: enum('left', 'right', 'both')
+    """
+
+    def make(self, key):
+        brain_areas, ml_locations = (Photostim.PhotostimLocation & key).fetch('brain_area', 'ml_location')
+        ml_locations = ml_locations.astype(float)
+        if len(set(brain_areas)) > 1:
+            raise ValueError('Multiple different brain areas for one photostim protocol is unsupported')
+        if (ml_locations > 0).any() and (ml_locations < 0).any():
+            lat = 'both'
+        elif (ml_locations > 0).all():
+            lat = 'right'
+        elif (ml_locations < 0).all():
+            lat = 'left'
+        else:
+            assert (ml_locations == 0).all()  # sanity check
+            raise ValueError('Ambiguous hemisphere: ML locations are all 0...')
+
+        self.insert1(dict(key, stim_brain_area=brain_areas[0], stim_laterality=lat))
 
 
 @schema
 class SessionTrial(dj.Imported):
     definition = """
     -> Session
-    trial : smallint 		# trial number
+    trial : smallint 		# trial number (1-based indexing)
     ---
     trial_uid : int  # unique across sessions/animals
-    start_time : decimal(8, 4)  # (s) relative to session beginning 
-    stop_time : decimal(8, 4)  # (s) relative to session beginning 
+    start_time : decimal(9, 4)  # (s) relative to session beginning 
+    stop_time : decimal(9, 4)  # (s) relative to session beginning 
     """
 
 
@@ -172,20 +189,6 @@ class SessionComment(dj.Manual):
     """
 
 
-@schema
-class Period(dj.Lookup):
-    definition = """
-    period: varchar(12)
-    ---
-    period_start: float  # (s) start of this period relative to GO CUE
-    period_end: float    # (s) end of this period relative to GO CUE
-    """
-
-    contents = [('sample', -2.4, -1.2),
-                ('delay', -1.2, 0.0),
-                ('response', 0.0, 1.2)]
-
-
 # ---- behavioral trials ----
 
 @schema
@@ -227,6 +230,8 @@ class BehaviorTrial(dj.Imported):
     -> TrialInstruction
     -> EarlyLick
     -> Outcome
+    auto_water=0: bool
+    free_water=0: bool
     """
 
 
@@ -303,3 +308,34 @@ class PassivePhotostimTrial(dj.Computed):
     def make(self, key):
         self.insert1(key)
 
+# ----
+
+
+@schema
+class Period(dj.Lookup):
+    definition = """  # time period between any two TrialEvent (eg the delay period is between delay and go)
+    period: varchar(12)
+    ---
+    -> TrialEventType.proj(start_event_type='trial_event_type')
+    start_time_shift: float  # (s) any time-shift amount with respect to the start_event_type
+    -> TrialEventType.proj(end_event_type='trial_event_type')
+    end_time_shift: float    # (s) any time-shift amount with respect to the end_event_type
+    """
+
+    contents = [('sample', 'sample', 0, 'delay', 0),
+                ('delay', 'delay', 0, 'go', 0),
+                ('response', 'go', 0, 'go', 1.2)]
+
+# ============================= PROJECTS ==================================================
+
+
+@schema
+class Project(dj.Lookup):
+    definition = """
+    project_name: varchar(128)
+    ---
+    project_desc='': varchar(1000) 
+    publication='': varchar(256)  # e.g. publication doi    
+    """
+
+    contents = [('MAP', 'The Mesoscale Activity Map project', '')]

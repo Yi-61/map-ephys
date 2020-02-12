@@ -5,18 +5,15 @@ import hashlib
 from functools import partial
 from inspect import getmembers
 from itertools import repeat
-
 import numpy as np
 import datajoint as dj
-
 import scipy.stats as sc_stats
 
-from . import lab
-from . import experiment
-from . import ephys
+from . import (lab, experiment, ephys)
 [lab, experiment, ephys]  # NOQA
 
 from . import get_schema_name
+from .util import _get_units_hemisphere
 
 schema = dj.schema(get_schema_name('psth'))
 log = logging.getLogger(__name__)
@@ -57,7 +54,7 @@ class TrialCondition(dj.Lookup):
 
     @property
     def contents(self):
-        contents_data = (
+        contents_data = [
             {
                 'trial_condition_name': 'good_noearlylick_hit',
                 'trial_condition_func': '_get_trials_exclude_stim',
@@ -65,7 +62,9 @@ class TrialCondition(dj.Lookup):
                     'task': 'audio delay',
                     'task_protocol': 1,
                     'outcome': 'hit',
-                    'early_lick': 'no early'}
+                    'early_lick': 'no early',
+                    'auto_water': 0,
+                    'free_water': 0}
             },
             {
                 'trial_condition_name': 'good_noearlylick_left_hit',
@@ -75,6 +74,8 @@ class TrialCondition(dj.Lookup):
                     'task_protocol': 1,
                     'outcome': 'hit',
                     'early_lick': 'no early',
+                    'auto_water': 0,
+                    'free_water': 0,
                     'trial_instruction': 'left'}
             },
             {
@@ -85,6 +86,8 @@ class TrialCondition(dj.Lookup):
                     'task_protocol': 1,
                     'outcome': 'hit',
                     'early_lick': 'no early',
+                    'auto_water': 0,
+                    'free_water': 0,
                     'trial_instruction': 'right'}
             },
             {
@@ -95,6 +98,8 @@ class TrialCondition(dj.Lookup):
                     'task_protocol': 1,
                     'outcome': 'miss',
                     'early_lick': 'no early',
+                    'auto_water': 0,
+                    'free_water': 0,
                     'trial_instruction': 'left'}
             },
             {
@@ -105,71 +110,68 @@ class TrialCondition(dj.Lookup):
                     'task_protocol': 1,
                     'outcome': 'miss',
                     'early_lick': 'no early',
+                    'auto_water': 0,
+                    'free_water': 0,
                     'trial_instruction': 'right'}
             },
             {
-                'trial_condition_name': 'all_noearlylick_both_alm_stim',
-                'trial_condition_func': '_get_trials_include_stim',
-                'trial_condition_arg': {
-                    '_outcome': 'ignore',
-                    'task': 'audio delay',
-                    'task_protocol': 1,
-                    'early_lick': 'no early',
-                    'brain_location_name': 'both_alm'}
-            },
-            {
-                'trial_condition_name': 'all_noearlylick_both_alm_nostim',
-                'trial_condition_func': '_get_trials_exclude_stim',
-                'trial_condition_arg': {
-                    '_outcome': 'ignore',
-                    'task': 'audio delay',
-                    'task_protocol': 1,
-                    'early_lick': 'no early'}
-            },
-            {
-                'trial_condition_name': 'all_noearlylick_both_alm_stim_left',
-                'trial_condition_func': '_get_trials_include_stim',
-                'trial_condition_arg': {
-                    '_outcome': 'ignore',
-                    'task': 'audio delay',
-                    'task_protocol': 1,
-                    'early_lick': 'no early',
-                    'trial_instruction': 'left',
-                    'brain_location_name': 'both_alm'}
-            },
-            {
-                'trial_condition_name': 'all_noearlylick_both_alm_nostim_left',
+                'trial_condition_name': 'all_noearlylick_nostim',
                 'trial_condition_func': '_get_trials_exclude_stim',
                 'trial_condition_arg': {
                     '_outcome': 'ignore',
                     'task': 'audio delay',
                     'task_protocol': 1,
                     'early_lick': 'no early',
+                    'auto_water': 0,
+                    'free_water': 0}
+            },
+            {
+                'trial_condition_name': 'all_noearlylick_nostim_left',
+                'trial_condition_func': '_get_trials_exclude_stim',
+                'trial_condition_arg': {
+                    '_outcome': 'ignore',
+                    'task': 'audio delay',
+                    'task_protocol': 1,
+                    'early_lick': 'no early',
+                    'auto_water': 0,
+                    'free_water': 0,
                     'trial_instruction': 'left'}
             },
             {
-                'trial_condition_name': 'all_noearlylick_both_alm_stim_right',
-                'trial_condition_func': '_get_trials_include_stim',
-                'trial_condition_arg': {
-                    '_outcome': 'ignore',
-                    'task': 'audio delay',
-                    'task_protocol': 1,
-                    'early_lick': 'no early',
-                    'trial_instruction': 'right',
-                    'brain_location_name': 'both_alm'}
-            },
-            {
-                'trial_condition_name': 'all_noearlylick_both_alm_nostim_right',
+                'trial_condition_name': 'all_noearlylick_nostim_right',
                 'trial_condition_func': '_get_trials_exclude_stim',
                 'trial_condition_arg': {
                     '_outcome': 'ignore',
                     'task': 'audio delay',
                     'task_protocol': 1,
                     'early_lick': 'no early',
+                    'auto_water': 0,
+                    'free_water': 0,
                     'trial_instruction': 'right'}
-            },
-        )
-        # generate key XXX: complicated why not just key from description?
+            }
+        ]
+
+        # PHOTOSTIM conditions
+        stim_locs = [('left', 'alm'), ('right', 'alm'), ('both', 'alm')]
+        for hemi, brain_area in stim_locs:
+            for instruction in (None, 'left', 'right'):
+                condition = {'trial_condition_name': '_'.join(filter(None, ['all', 'noearlylick',
+                                                                            '_'.join([hemi, brain_area]), 'stim',
+                                                                            instruction])),
+                             'trial_condition_func': '_get_trials_include_stim',
+                             'trial_condition_arg': {
+                                 **{'_outcome': 'ignore',
+                                    'task': 'audio delay',
+                                    'task_protocol': 1,
+                                    'early_lick': 'no early',
+                                    'auto_water': 0,
+                                    'free_water': 0,
+                                    'stim_laterality': hemi,
+                                    'stim_brain_area': brain_area},
+                                 **({'trial_instruction': instruction} if instruction else {})}
+                             }
+                contents_data.append(condition)
+
         return ({**d, 'trial_condition_hash':
                  key_hash({'trial_condition_func': d['trial_condition_func'],
                            **d['trial_condition_arg']})}
@@ -178,6 +180,22 @@ class TrialCondition(dj.Lookup):
     @classmethod
     def get_trials(cls, trial_condition_name):
         return cls.get_func({'trial_condition_name': trial_condition_name})()
+
+    @classmethod
+    def get_cond_name_from_keywords(cls, keywords):
+        matched_cond_names = []
+        for cond_name in cls.fetch('trial_condition_name'):
+            match = True
+            tmp_cond = cond_name
+            for k in keywords:
+                if k in tmp_cond:
+                    tmp_cond = tmp_cond.replace(k, '')
+                else:
+                    match = False
+                    break
+            if match:
+                matched_cond_names.append(cond_name)
+        return sorted(matched_cond_names)
 
     @classmethod
     def get_func(cls, key):
@@ -190,7 +208,7 @@ class TrialCondition(dj.Lookup):
 
     @classmethod
     def _get_trials_exclude_stim(cls, **kwargs):
-
+        # Note: inclusion (attr) is AND - exclusion (_attr) is OR
         log.debug('_get_trials_exclude_stim: {}'.format(kwargs))
 
         restr, _restr = {}, {}
@@ -200,7 +218,8 @@ class TrialCondition(dj.Lookup):
             else:
                 restr[k] = v
 
-        stim_attrs = set(experiment.Photostim.heading.names) - set(experiment.Session.heading.names)
+        stim_attrs = set((experiment.Photostim * experiment.PhotostimBrainRegion
+                          * experiment.PhotostimEvent).heading.names) - set(experiment.Session.heading.names)
         behav_attrs = set(experiment.BehaviorTrial.heading.names)
 
         _stim_key = {k: v for k, v in _restr.items() if k in stim_attrs}
@@ -209,12 +228,13 @@ class TrialCondition(dj.Lookup):
         stim_key = {k: v for k, v in restr.items() if k in stim_attrs}
         behav_key = {k: v for k, v in restr.items() if k in behav_attrs}
 
-        return (((experiment.BehaviorTrial & behav_key) - (_behav_key if _behav_key else [])) -
-                (experiment.PhotostimEvent * (experiment.Photostim & stim_key) - (_stim_key if _stim_key else [])).proj())
+        return (((experiment.BehaviorTrial & behav_key) - [{k: v} for k, v in _behav_key.items()]) -
+                ((experiment.PhotostimEvent * experiment.PhotostimBrainRegion * experiment.Photostim & stim_key)
+                 - [{k: v} for k, v in _stim_key.items()]).proj())
 
     @classmethod
     def _get_trials_include_stim(cls, **kwargs):
-
+        # Note: inclusion (attr) is AND - exclusion (_attr) is OR
         log.debug('_get_trials_include_stim: {}'.format(kwargs))
 
         restr, _restr = {}, {}
@@ -224,7 +244,8 @@ class TrialCondition(dj.Lookup):
             else:
                 restr[k] = v
 
-        stim_attrs = set(experiment.Photostim.heading.names) - set(experiment.Session.heading.names)
+        stim_attrs = set((experiment.Photostim * experiment.PhotostimBrainRegion
+                          * experiment.PhotostimEvent).heading.names) - set(experiment.Session.heading.names)
         behav_attrs = set(experiment.BehaviorTrial.heading.names)
 
         _stim_key = {k: v for k, v in _restr.items() if k in stim_attrs}
@@ -233,8 +254,9 @@ class TrialCondition(dj.Lookup):
         stim_key = {k: v for k, v in restr.items() if k in stim_attrs}
         behav_key = {k: v for k, v in restr.items() if k in behav_attrs}
 
-        return (((experiment.BehaviorTrial & behav_key) - (_behav_key if _behav_key else [])) &
-                (experiment.PhotostimEvent * (experiment.Photostim & stim_key) - (_stim_key if _stim_key else [])).proj())
+        return (((experiment.BehaviorTrial & behav_key) - [{k: v} for k, v in _behav_key.items()]) &
+                ((experiment.PhotostimEvent * experiment.PhotostimBrainRegion * experiment.Photostim & stim_key)
+                 - [{k: v} for k, v in _stim_key.items()]).proj())
 
 
 @schema
@@ -247,14 +269,26 @@ class UnitPsth(dj.Computed):
     """
     psth_params = {'xmin': -3, 'xmax': 3, 'binsize': 0.04}
 
+    @property
+    def key_source(self):
+        """
+        For those conditions that include stim, process those with PhotostimBrainRegion already computed only
+        Only units not of type "all"
+        """
+        nostim = (ephys.Unit * (TrialCondition & 'trial_condition_func = "_get_trials_exclude_stim"')
+                  & 'unit_quality != "all"')
+        stim = ((ephys.Unit & (experiment.Session & experiment.PhotostimBrainRegion))
+                * (TrialCondition & 'trial_condition_func = "_get_trials_include_stim"') & 'unit_quality != "all"')
+        return nostim.proj() + stim.proj()
+
     def make(self, key):
-        log.info('UnitPsth.make(): key: {}'.format(key))
+        log.debug('UnitPsth.make(): key: {}'.format(key))
 
         # expand TrialCondition to trials,
         trials = TrialCondition.get_trials(key['trial_condition_name'])
 
         # fetch related spike times
-        q = (ephys.TrialSpikes & key & trials.proj())
+        q = (ephys.Unit.TrialSpikes & key & trials.proj())
         spikes = q.fetch('spike_times')
 
         if len(spikes) == 0:
@@ -286,8 +320,8 @@ class UnitPsth(dj.Computed):
         unit condition and included / excluded condition (sub-)variables.
         Returns a dictionary of the form:
           {
-             'trials': ephys.TrialSpikes.trials,
-             'spikes': ephys.TrialSpikes.spikes,
+             'trials': ephys.Unit.TrialSpikes.trials,
+             'spikes': ephys.Unit.TrialSpikes.spikes,
              'psth': UnitPsth.unit_psth,
              'raster': Spike * Trial raster [np.array, np.array]
           }
@@ -299,16 +333,20 @@ class UnitPsth(dj.Computed):
 
         trials = TrialCondition.get_func(condition_key)()
 
-        psth = (UnitPsth & {**condition_key, **unit_key}).fetch1()['unit_psth']
+        unit_psth = (UnitPsth & {**condition_key, **unit_key}).fetch1()['unit_psth']
+        if unit_psth is None:
+            raise Exception('No spikes found for this unit and trial-condition')
 
-        spikes, trials = (ephys.TrialSpikes & trials & unit_key).fetch(
+        psth, edges = unit_psth
+
+        spikes, trials = (ephys.Unit.TrialSpikes & trials & unit_key).fetch(
             'spike_times', 'trial', order_by='trial asc')
 
         raster = [np.concatenate(spikes),
                   np.concatenate([[t] * len(s)
                                   for s, t in zip(spikes, trials)])]
 
-        return dict(trials=trials, spikes=spikes, psth=psth, raster=raster)
+        return dict(trials=trials, spikes=spikes, psth=(psth, edges[1:]), raster=raster)
 
 
 @schema
@@ -342,7 +380,7 @@ class PeriodSelectivity(dj.Computed):
 
     alpha = 0.05  # default alpha value
 
-    key_source = experiment.Period * (ephys.Unit & 'unit_quality != "all"')
+    key_source = experiment.Period * (ephys.Unit & ephys.ProbeInsertion.InsertionLocation & 'unit_quality != "all"')
 
     def make(self, key):
         '''
@@ -350,68 +388,47 @@ class PeriodSelectivity(dj.Computed):
         '''
         log.debug('PeriodSelectivity.make(): key: {}'.format(key))
 
-        # Verify insertion location is present,
-        egpos = None
-        try:
-            egpos = (ephys.ProbeInsertion.InsertionLocation
-                     * experiment.BrainLocation & key).fetch1()
-        except dj.DataJointError as e:
-            if 'exactly one tuple' in repr(e):
-                log.error('... Insertion Location missing. skipping')
-                return
+        hemi = _get_units_hemisphere(key)
 
         # retrieving the spikes of interest,
-        spikes_q = ((ephys.TrialSpikes & key)
-                    & (experiment.BehaviorTrial()
+        spikes_q = ((ephys.Unit.TrialSpikes & key)
+                    * (experiment.BehaviorTrial()
                        & {'task': 'audio delay'}
                        & {'early_lick': 'no early'}
                        & {'outcome': 'hit'}) - experiment.PhotostimEvent)
 
-        # and their corresponding behavior,
-        lr = ['left', 'right']
-        behav = (experiment.BehaviorTrial & spikes_q.proj()).fetch(
-            order_by='trial asc')
-        behav_lr = {k: np.where(behav['trial_instruction'] == k)[0] for k in lr}
+        if not spikes_q:  # no spikes found
+            self.insert1({**key, 'period_selectivity': 'non-selective'})
+            return
 
-        if egpos['hemisphere'] == 'left':
-            behav_i = behav_lr['left']
-            behav_c = behav_lr['right']
-        else:
-            behav_i = behav_lr['right']
-            behav_c = behav_lr['left']
+        # retrieving event times
+        start_event, start_tshift, end_event, end_tshift = (experiment.Period & key).fetch1(
+            'start_event_type', 'start_time_shift', 'end_event_type', 'end_time_shift')
+        start_event_q = {k['trial']: float(k['start_event_time'])
+                         for k in (experiment.TrialEvent & key & {'trial_event_type': start_event}).proj(
+            start_event_time=f'trial_event_time + {start_tshift}').fetch(as_dict=True)}
+        end_event_q = {k['trial']: float(k['end_event_time'])
+                       for k in (experiment.TrialEvent & key & {'trial_event_type': end_event}).proj(
+            end_event_time=f'trial_event_time + {end_tshift}').fetch(as_dict=True)}
+        cue_event_q = {k['trial']: float(k['trial_event_time'])
+                       for k in (experiment.TrialEvent & key & {'trial_event_type': 'go'}).fetch(as_dict=True)}
 
-        # constructing a square, nan-padded trial x spike array
-        spikes = spikes_q.fetch(order_by='trial asc')
-        ydim = max(len(i['spike_times']) for i in spikes)
-        square = np.array(
-            np.array([np.concatenate([st, pad])[:ydim]
-                      for st, pad in zip(spikes['spike_times'],
-                                         repeat([math.nan]*ydim))]))
-
-        # with which to calculate the selectivity over the given period
-        period = (experiment.Period & key).fetch1()
-
-        # by determining the period boundaries,
-        bounds = (period['period_start'], period['period_end'])
-
-        # masking the appropriate spikes,
-        lower_mask = np.ma.masked_greater_equal(square, bounds[0])
-        upper_mask = np.ma.masked_less_equal(square, bounds[1])
-        inrng_mask = np.logical_and(lower_mask.mask, upper_mask.mask)
-
-        # computing their spike rate,
-        rsum = np.sum(inrng_mask, axis=1)
-        dur = bounds[1] - bounds[0]
-        freq = rsum / dur
+        # compute spike rate during the period-of-interest for each trial
+        freq_i, freq_c = [], []
+        for trial, trial_instruct, spike_times in zip(*spikes_q.fetch('trial', 'trial_instruction', 'spike_times')):
+            start_time = start_event_q[trial] - cue_event_q[trial]
+            stop_time = end_event_q[trial] - cue_event_q[trial]
+            spk_rate = np.logical_and(spike_times >= start_time, spike_times < stop_time).sum() / (stop_time - start_time)
+            if hemi == trial_instruct:
+                freq_i.append(spk_rate)
+            else:
+                freq_c.append(spk_rate)
 
         # and testing for selectivity.
-        freq_i = freq[behav_i]
-        freq_c = freq[behav_c]
         t_stat, pval = sc_stats.ttest_ind(freq_i, freq_c, equal_var=True)
 
         freq_i_m = np.average(freq_i)
         freq_c_m = np.average(freq_c)
-
 
         pval = 1 if np.isnan(pval) else pval
         if pval > self.alpha:
@@ -420,13 +437,10 @@ class PeriodSelectivity(dj.Computed):
             pref = ('ipsi-selective' if freq_i_m > freq_c_m
                     else 'contra-selective')
 
-        self.insert1({
-            **key,
-            'period_selectivity': pref,
-            'ipsi_firing_rate': freq_i_m,
-            'contra_firing_rate': freq_c_m,
-            'p_value': pval
-        })
+        self.insert1({**key, 'p_value': pval,
+                      'period_selectivity': pref,
+                      'ipsi_firing_rate': freq_i_m,
+                      'contra_firing_rate': freq_c_m})
 
 
 @schema
@@ -475,9 +489,9 @@ class UnitSelectivity(dj.Computed):
 def compute_unit_psth(unit_key, trial_keys, per_trial=False):
     """
     Compute unit-level psth for the specified unit and trial-set - return (time,)
-    If per_trial == True, compute trial-level psth - return (trial#, time)
+    If per_trial == True, compute trial-level psth - return ((trial x time), time_vec)
     """
-    q = (ephys.TrialSpikes & unit_key & trial_keys)
+    q = (ephys.Unit.TrialSpikes & unit_key & trial_keys)
     if not q:
         return None
 
@@ -514,7 +528,7 @@ def compute_coding_direction(contra_psths, ipsi_psths, time_period=None):
     contra_ave_spk_rate = np.array([spk_rate[np.logical_and(spk_edge >= p_start, spk_edge < p_end)].mean()
                                     for spk_rate, spk_edge in contra_psths])
     ipsi_ave_spk_rate = np.array([spk_rate[np.logical_and(spk_edge >= p_start, spk_edge < p_end)].mean()
-                                    for spk_rate, spk_edge in ipsi_psths])
+                                  for spk_rate, spk_edge in ipsi_psths])
 
     cd_vec = contra_ave_spk_rate - ipsi_ave_spk_rate
     return cd_vec / np.linalg.norm(cd_vec)
@@ -530,13 +544,7 @@ def compute_CD_projected_psth(units, time_period=None):
              ipsi-trials CD projected trial-psth
              psth time-stamps
     """
-    unit_hemi = (ephys.ProbeInsertion.InsertionLocation * experiment.BrainLocation
-                 & units).fetch('hemisphere')
-    if len(unit_hemi) != 1:
-        raise Exception('Units from both hemispheres found')
-    else:
-        unit_hemi = unit_hemi[0]
-
+    unit_hemi = _get_units_hemisphere(units)
     session_key = experiment.Session & units
     if len(session_key) != 1:
         raise Exception('Units from multiple sessions found')
@@ -545,10 +553,10 @@ def compute_CD_projected_psth(units, time_period=None):
     # get units and trials - ensuring they have trial-spikes
     contra_trials = (TrialCondition().get_trials(
         'good_noearlylick_right_hit' if unit_hemi == 'left' else 'good_noearlylick_left_hit')
-                     & session_key & ephys.TrialSpikes).fetch('KEY')
+                     & session_key & ephys.Unit.TrialSpikes).fetch('KEY')
     ipsi_trials = (TrialCondition().get_trials(
         'good_noearlylick_left_hit' if unit_hemi == 'left' else 'good_noearlylick_right_hit')
-                     & session_key & ephys.TrialSpikes).fetch('KEY')
+                     & session_key & ephys.Unit.TrialSpikes).fetch('KEY')
 
     # get per-trial unit psth for all units - unit# x (trial# x time)
     contra_trial_psths, contra_edges = zip(*(compute_unit_psth(unit, contra_trials, per_trial=True)
@@ -573,6 +581,6 @@ def compute_CD_projected_psth(units, time_period=None):
     proj_contra_trial = np.vstack(np.dot(tr_u, cd_vec) for tr_u in contra_psth_per_trial)  # trial# x time
     proj_ipsi_trial = np.vstack(np.dot(tr_u, cd_vec) for tr_u in ipsi_psth_per_trial)    # trial# x time
 
-    return cd_vec, proj_contra_trial, proj_ipsi_trial, time_stamps
+    return cd_vec, proj_contra_trial, proj_ipsi_trial, time_stamps, unit_hemi
 
 
